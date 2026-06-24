@@ -9,7 +9,7 @@ import { ElMessage } from 'element-plus'
 // 创建 Axios 实例
 const service = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
-  timeout: 30000 // 请求超时时间 30 秒
+  timeout: 120000 // 请求超时时间 120 秒（原 30 秒）
 })
 
 // 请求拦截器（可添加 Token、Loading 等）

@@ -27,6 +27,10 @@
           <el-icon><TrendCharts /></el-icon>
           <span>预测结果</span>
         </el-menu-item>
+        <el-menu-item index="/analysis">
+          <el-icon><DataAnalysis /></el-icon>
+          <span>预测分析</span>
+        </el-menu-item>
       </el-menu>
 
       <!-- 移动端汉堡菜单按钮 -->

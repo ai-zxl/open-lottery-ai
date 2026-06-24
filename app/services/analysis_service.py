@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-预测分析服务：整合预测记录，提取最优推荐号码。
+预测分析服务：整合预测记录，提取最优推荐号码，提供号码频率统计。
 """
 from sqlalchemy import select
 from app.core.database import AsyncSessionLocal
@@ -11,7 +11,6 @@ from app.models.dlt_history import DLTHistory
 from datetime import date, datetime, timedelta
 from collections import Counter
 import random
-
 
 # ==================== 开奖规则配置 ====================
 LOTTERY_RULES = {
@@ -66,20 +65,43 @@ def get_next_draw_date(lottery_type, from_date=None):
     return None
 
 
+def get_target_draw_date(lottery_type):
+    """获取当前期对应的开奖日期"""
+    today = date.today()
+    if is_draw_day(lottery_type, today):
+        return today
+    return get_next_draw_date(lottery_type, today)
+
+
 async def get_today_forecasts(lottery_type='ssq'):
-    """获取当天所有预测记录（基于 forecast_date 字段）"""
+    """获取当前开奖期的所有预测记录（基于 forecast_date 字段），按模型时间戳降序排列"""
     async with AsyncSessionLocal() as db:
-        today = date.today()
+        target_date = get_target_draw_date(lottery_type)
+        if target_date is None:
+            return []
         if lottery_type == 'ssq':
             query = select(SSQForecast).where(
-                SSQForecast.forecast_date == today
+                SSQForecast.forecast_date == target_date
             ).order_by(SSQForecast.create_time.desc())
-        else:  # dlt
+        else:
             query = select(DLTForecast).where(
-                DLTForecast.forecast_date == today
+                DLTForecast.forecast_date == target_date
             ).order_by(DLTForecast.create_time.desc())
         result = await db.execute(query)
-        return result.scalars().all()
+        records = result.scalars().all()
+
+        # 按模型文件名中的时间戳降序排序
+        def extract_timestamp(record):
+            name = record.model_version
+            try:
+                base = name.rsplit('.', 1)[0]
+                ts = int(base.split('_')[-1])
+                return ts
+            except:
+                return 0
+
+        records.sort(key=extract_timestamp, reverse=True)
+        return records
 
 
 async def analyze_best_recommendation(forecasts, lottery_type='ssq'):
@@ -133,6 +155,78 @@ async def analyze_best_recommendation(forecasts, lottery_type='ssq'):
         "red": recommended_reds,
         "blue": recommended_blues if len(recommended_blues) > 1 else recommended_blues[0],
         "confidence": round(total_weight / len(forecasts), 3) if forecasts else 0
+    }
+
+
+# ==================== 新增：号码频率统计分析 ====================
+async def analyze_number_frequency(forecasts, lottery_type='ssq'):
+    """
+    分析预测记录中的号码出现频率，返回红球和蓝球的 TOP 排名
+    """
+    if not forecasts:
+        return None
+
+    rule = LOTTERY_RULES.get(lottery_type)
+    if not rule:
+        return None
+
+    red_counter = Counter()
+    blue_counter = Counter()
+    total_count = len(forecasts)
+
+    for f in forecasts:
+        if lottery_type == 'ssq':
+            reds = [f.red_one, f.red_two, f.red_three, f.red_four, f.red_five, f.red_six]
+            blues = [f.blue_one]
+        else:
+            reds = [f.red_one, f.red_two, f.red_three, f.red_four, f.red_five]
+            blues = [f.blue_one, f.blue_two]
+
+        for r in reds:
+            red_counter[r] += 1
+        for b in blues:
+            blue_counter[b] += 1
+
+    # 红球 TOP 15（按出现次数排序）
+    red_top = []
+    for num, count in red_counter.most_common(15):
+        red_top.append({
+            "number": num,
+            "count": count,
+            "rate": round(count / total_count * 100, 1)
+        })
+
+    # 蓝球 TOP 12（按出现次数排序）
+    blue_top = []
+    for num, count in blue_counter.most_common(12):
+        blue_top.append({
+            "number": num,
+            "count": count,
+            "rate": round(count / total_count * 100, 1)
+        })
+
+    # 获取最高评分的 TOP 5 模型
+    top_models = sorted(forecasts, key=lambda x: x.quality_score or 0, reverse=True)[:5]
+    top_models_data = []
+    for f in top_models:
+        if lottery_type == 'ssq':
+            reds = [f.red_one, f.red_two, f.red_three, f.red_four, f.red_five, f.red_six]
+            blues = [f.blue_one]
+        else:
+            reds = [f.red_one, f.red_two, f.red_three, f.red_four, f.red_five]
+            blues = [f.blue_one, f.blue_two]
+        top_models_data.append({
+            "model_name": f.model_version,
+            "quality_score": f.quality_score,
+            "red": reds,
+            "blue": blues
+        })
+
+    return {
+        "total_count": total_count,
+        "red_top": red_top,
+        "blue_top": blue_top,
+        "top_models": top_models_data
     }
 
 

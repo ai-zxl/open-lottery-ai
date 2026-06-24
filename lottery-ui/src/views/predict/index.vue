@@ -11,7 +11,7 @@
           </el-radio-group>
         </el-form-item>
 
-        <!-- 模型多选 + 搜索（filterable 已支持搜索） -->
+        <!-- 模型多选 + 搜索 + 全选 -->
         <el-form-item label="选择模型">
           <el-select
             v-model="selectedModels"
@@ -23,6 +23,14 @@
             :disabled="modelOptions.length === 0"
             @change="onModelChange"
           >
+            <!-- 全选选项 -->
+            <el-option
+              key="__select_all__"
+              label="☑️ 全选"
+              value="__select_all__"
+              style="font-weight:bold;color:#409EFF;"
+            />
+            <!-- 模型选项 -->
             <el-option
               v-for="item in modelOptions"
               :key="item.value"
@@ -31,7 +39,7 @@
             />
           </el-select>
           <div style="color:#909399;font-size:12px;margin-top:4px;">
-            共 {{ modelOptions.length }} 个模型，输入关键词可快速筛选
+            共 {{ modelOptions.length }} 个模型，已选 {{ selectedModels.length }} 个
           </div>
         </el-form-item>
 
@@ -120,7 +128,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { listModels } from '@/api/model'
 import { getPrediction } from '@/api/predict'
 import { ElMessage } from 'element-plus'
@@ -133,6 +141,11 @@ const results = ref([])
 const loading = ref(false)
 const loadingModels = ref(false)
 const globalError = ref(null)
+
+// ----- 获取模型实际列表（不含全选） -----
+const actualModelOptions = computed(() => {
+  return modelOptions.value.filter(item => item.value !== '__select_all__')
+})
 
 // ----- 加载模型列表 -----
 const loadModels = async () => {
@@ -148,10 +161,8 @@ const loadModels = async () => {
         // 美化显示：提取参数信息
         const base = name.replace('.pt', '')
         const parts = base.split('_')
-        // 例如 ssq_epochs200_bs128_seq100_lr0_0001_1234567890
         let label = base
         if (parts.length >= 5) {
-          // 尝试提取关键参数
           const epochPart = parts.find(p => p.startsWith('epochs')) || ''
           const bsPart = parts.find(p => p.startsWith('bs')) || ''
           const seqPart = parts.find(p => p.startsWith('seq')) || ''
@@ -194,10 +205,30 @@ const onLotteryChange = () => {
   loadModels()
 }
 
-// 模型选择变化（可在此处添加额外逻辑）
+// ----- 模型选择变化（处理全选逻辑） -----
 const onModelChange = (val) => {
-  // 不做特殊处理
+  // 检测是否点击了全选选项
+  const hasSelectAll = val.includes('__select_all__')
+  const actualModels = actualModelOptions.value.map(item => item.value)
+
+  if (hasSelectAll) {
+    // 如果当前已全选，则取消全选；否则全选
+    const isAllSelected = actualModels.every(m => val.includes(m))
+    if (isAllSelected) {
+      // 已全选 → 取消全选（移除所有模型）
+      selectedModels.value = []
+    } else {
+      // 未全选 → 全选（包含所有模型）
+      selectedModels.value = actualModels
+    }
+    // 移除 __select_all__ 标识
+    const cleanVal = selectedModels.value.filter(v => v !== '__select_all__')
+    selectedModels.value = cleanVal
+  }
 }
+
+// ----- 分批预测（每批最多 10 个） -----
+const BATCH_SIZE = 10
 
 // 预测
 const handlePredict = async () => {
@@ -210,46 +241,60 @@ const handlePredict = async () => {
   globalError.value = null
   results.value = []
 
-  const promises = selectedModels.value.map(async (modelName) => {
-    try {
-      const data = await getPrediction({
-        lottery_type: lotteryType.value,
-        model_name: modelName
-      })
-      return {
-        modelName,
-        success: true,
-        data
-      }
-    } catch (error) {
-      return {
-        modelName,
-        success: false,
-        error: error.message || '预测失败'
-      }
-    }
-  })
+  const allModels = selectedModels.value
+  const total = allModels.length
+  let completed = 0
+  const allResults = []
 
-  const settledResults = await Promise.allSettled(promises)
-  const finalResults = settledResults.map((item, index) => {
-    if (item.status === 'fulfilled') {
-      return item.value
-    } else {
-      return {
-        modelName: selectedModels.value[index] || '未知模型',
-        success: false,
-        error: item.reason?.message || '请求异常'
+  // 分批处理
+  for (let i = 0; i < allModels.length; i += BATCH_SIZE) {
+    const batch = allModels.slice(i, i + BATCH_SIZE)
+    const promises = batch.map(async (modelName) => {
+      try {
+        const data = await getPrediction({
+          lottery_type: lotteryType.value,
+          model_name: modelName
+        })
+        return { modelName, success: true, data }
+      } catch (error) {
+        // 友好错误提示
+        let msg = error.message || '预测失败'
+        if (error.code === 'ECONNABORTED') {
+          msg = '请求超时，请稍后重试'
+        } else if (error.response?.status === 404) {
+          msg = '模型文件不存在，请确认模型已训练'
+        } else if (error.response?.status === 500) {
+          msg = '服务器处理异常，请稍后重试'
+        }
+        return { modelName, success: false, error: msg }
       }
-    }
-  })
+    })
 
-  results.value = finalResults
+    const batchResults = await Promise.allSettled(promises)
+    const finalBatch = batchResults.map((item, index) => {
+      if (item.status === 'fulfilled') {
+        return item.value
+      } else {
+        return {
+          modelName: batch[index] || '未知模型',
+          success: false,
+          error: item.reason?.message || '请求异常'
+        }
+      }
+    })
 
-  const successCount = finalResults.filter(r => r.success).length
-  if (successCount === finalResults.length) {
+    allResults.push(...finalBatch)
+    completed += batch.length
+    ElMessage.info(`进度：${completed}/${total} 个模型`)
+  }
+
+  results.value = allResults
+
+  const successCount = allResults.filter(r => r.success).length
+  if (successCount === allResults.length) {
     ElMessage.success(`全部 ${successCount} 个模型预测成功`)
   } else if (successCount > 0) {
-    ElMessage.warning(`${successCount}/${finalResults.length} 个模型预测成功，请查看详情`)
+    ElMessage.warning(`${successCount}/${allResults.length} 个模型预测成功，请查看详情`)
   } else {
     ElMessage.error('所有模型预测均失败')
   }
@@ -270,7 +315,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* 样式保持不变 */
 .predict-container {
   padding: 0;
 }

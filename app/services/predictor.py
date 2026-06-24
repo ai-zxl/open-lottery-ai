@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 预测服务：加载已训练模型和标准化器，生成预测结果并存入数据库。
-逻辑：同一天同一模型只保留一条预测记录（存在则更新），不同模型可有多条。
+逻辑：同一开奖期同一模型只保留一条预测记录（存在则更新），不同模型可有多条。
 支持指定模型文件进行预测。
 """
 import torch
@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.models.ssq_forecast import SSQForecast
 from app.models.dlt_forecast import DLTForecast
+from app.services.analysis_service import get_next_draw_date, is_draw_day
 import os
 import random
 
@@ -22,7 +23,7 @@ import random
 async def get_prediction(lottery_type, model_version="latest", model_name=None):
     """
     根据彩种生成预测，并保存到对应的预测表中。
-    同一天同一模型只保留一条记录（存在则更新），不同模型可有多条。
+    同一开奖期同一模型只保留一条记录（存在则更新），不同模型可有多条。
     可指定具体模型文件名进行预测。
     """
     save_dir = settings.MODEL_SAVE_DIR
@@ -128,15 +129,21 @@ async def get_prediction(lottery_type, model_version="latest", model_name=None):
 
     quality_score = round(0.85 + random.uniform(-0.05, 0.05), 3)
 
-    # ========== 判断当天该模型是否已有记录 ==========
+    # ========== 计算目标开奖日期 ==========
     today = date.today()
-    # model_name 已确定（如 ssq_epochs200_bs128_seq100_lr0_0001_1782232238.pt）
+    if is_draw_day(lottery_type, today):
+        target_date = today
+    else:
+        target_date = get_next_draw_date(lottery_type, today)
+        if target_date is None:
+            raise ValueError(f"无法找到 {lottery_type} 的下一个开奖日")
 
+    # ========== 判断该开奖期该模型是否已有记录 ==========
     async with AsyncSessionLocal() as db:
         if lottery_type == 'ssq':
-            # 查询当天该模型的预测记录
+            # 查询该开奖期该模型的预测记录
             stmt = select(SSQForecast).where(
-                SSQForecast.forecast_date == today,
+                SSQForecast.forecast_date == target_date,
                 SSQForecast.model_version == model_name   # 利用 model_version 存储文件名
             )
             result = await db.execute(stmt)
@@ -153,12 +160,13 @@ async def get_prediction(lottery_type, model_version="latest", model_name=None):
                 existing.blue_one = blues[0]
                 existing.quality_score = quality_score
                 existing.model_version = model_name   # 保持文件名不变
+                existing.forecast_date = target_date
                 await db.commit()
                 action = "更新"
             else:
                 # 不存在则插入
                 forecast = SSQForecast(
-                    forecast_date=today,
+                    forecast_date=target_date,
                     group_id=1,
                     red_one=reds[0], red_two=reds[1], red_three=reds[2],
                     red_four=reds[3], red_five=reds[4], red_six=reds[5],
@@ -172,7 +180,7 @@ async def get_prediction(lottery_type, model_version="latest", model_name=None):
 
         else:  # dlt
             stmt = select(DLTForecast).where(
-                DLTForecast.forecast_date == today,
+                DLTForecast.forecast_date == target_date,
                 DLTForecast.model_version == model_name
             )
             result = await db.execute(stmt)
@@ -188,11 +196,12 @@ async def get_prediction(lottery_type, model_version="latest", model_name=None):
                 existing.blue_two = blues[1]
                 existing.quality_score = quality_score
                 existing.model_version = model_name
+                existing.forecast_date = target_date
                 await db.commit()
                 action = "更新"
             else:
                 forecast = DLTForecast(
-                    forecast_date=today,
+                    forecast_date=target_date,
                     group_id=1,
                     red_one=reds[0], red_two=reds[1], red_three=reds[2],
                     red_four=reds[3], red_five=reds[4],
@@ -210,5 +219,6 @@ async def get_prediction(lottery_type, model_version="latest", model_name=None):
         "quality_score": quality_score,
         "model_version": model_name,      # 返回模型文件名
         "action": action,
-        "model_name": model_name
+        "model_name": model_name,
+        "forecast_date": target_date.strftime("%Y-%m-%d")
     }
