@@ -25,8 +25,9 @@
 - 📊 **数据抓取模块**：增量抓取双色球和大乐透历史数据（`scripts/` 目录）
 - 🗄️ **数据管理模块**：MySQL 存储历史数据及 20+ 分析字段（和值、跨度、奇偶比、AC 值等）
 - 🧠 **模型训练模块**：基于 PyTorch + Transformer 的异步训练服务（Celery + RabbitMQ）
-- 🔮 **预测推理模块**：生成预测号码并保存到数据库
-- 🖥️ **Web 管理界面**：Vue3 可视化面板，支持数据浏览、训练控制和预测展示
+- 🔮 **预测推理模块**：支持多模型选择，生成预测号码并保存到数据库
+- 📈 **预测分析模块**：整合今日预测记录，提取最优推荐号码，与开奖结果对比
+- 🖥️ **Web 管理界面**：Vue3 可视化面板，支持数据浏览、训练控制、预测展示和结果分析
 
 项目采用 **前后端分离** 架构，后端提供 REST API，前端独立部署，适合企业级 AI 平台集成。
 
@@ -38,18 +39,22 @@
 
 - ✅ **异步任务队列**：基于 RabbitMQ + Celery，支持多 Worker 并发训练，任务持久化
 - ✅ **深度学习框架**：PyTorch + Transformer，支持自定义超参数（轮数、批次、序列长度、学习率）
+- ✅ **多模型管理**：每次训练根据参数生成唯一模型文件名（`{彩种}_epochs{N}_bs{N}_seq{N}_lr{N}_{时间戳}.pt`），永不覆盖
 - ✅ **数据管理**：MySQL 存储历史数据及 20+ 分析字段（和值、跨度、奇偶比、AC 值等）
 - ✅ **进度缓存**：Redis 缓存训练进度，支持高频状态轮询
 - ✅ **REST API**：FastAPI 自动生成 OpenAPI 文档（Swagger UI）
 - ✅ **设备支持**：自动检测 GPU（CUDA）或回退到 CPU 训练
 - ✅ **水平扩展**：支持增加 Celery Worker 数量或部署多个 FastAPI 实例
+- ✅ **一键训练**：支持训练前自动抓取最新数据，保持数据最新
 
 ### 前端（Vue3）
 
 - ✅ **首页**：最新开奖数据（双色球 + 大乐透）+ 已训练模型列表
 - ✅ **数据管理**：分页浏览双色球/大乐透历史数据（红球/前区、蓝球/后区、和值、跨度）
-- ✅ **模型训练**：可视化配置超参数，实时轮询训练状态（等待中/训练中/已完成/失败）
-- ✅ **预测结果**：展示预测号码、质量评分（0-1）、模型版本
+- ✅ **模型训练**：可视化配置超参数（训练轮数 1-500、批次大小 1-256、序列长度 10-3000、学习率 5位精度），实时轮询训练状态
+- ✅ **预测结果**：支持**多模型同时预测**，每个模型生成独立的预测结果卡片
+- ✅ **预测分析**：展示今日所有预测记录，基于质量评分加权提取最优推荐号码，与开奖结果对比显示命中情况
+- ✅ **开奖规则展示**：显示双色球（二、四、日）和大乐透（一、三、六）开奖规则及下一期开奖倒计时
 - ✅ **开放架构**：无需登录，开箱即用，可扩展权限模块
 
 ---
@@ -87,19 +92,20 @@
 ~~~
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ Vue3 前端 (lottery-ui) │
-│ ├─ 首页（最新开奖 + 模型列表） │
+│ ├─ 首页仪表盘（最新开奖 + 模型列表） │
 │ ├─ 数据管理（分页浏览历史数据） │
 │ ├─ 模型训练（配置参数 + 状态监控） │
-│ └─ 预测结果（生成 + 展示预测号码） │
+│ ├─ 预测结果（多模型并行预测） │
+│ └─ 预测分析（推荐号码 + 开奖对比） │
 └─────────────────────────────────────┬───────────────────────────────────────┘
 │ HTTP (代理 /api → localhost:8000)
 ┌─────────────────────────────────────▼───────────────────────────────────────┐
 │ FastAPI 后端 (app/) │
-│ ├─ api/routes/ - 数据管理 / 训练 / 预测 / 模型 API │
+│ ├─ api/routes/ - 数据管理 / 训练 / 预测 / 模型 / 分析 API │
 │ ├─ core/ - 配置 / 数据库 / Redis / Celery │
 │ ├─ models/ - SQLAlchemy ORM 模型 │
 │ ├─ schemas/ - Pydantic 请求/响应模型 │
-│ ├─ services/ - 数据加载 / Transformer / 训练器 / 预测器 │
+│ ├─ services/ - 数据加载 / Transformer / 训练器 / 预测器 / 分析器 │
 │ └─ tasks/ - Celery 异步训练任务 │
 └─────────┬───────────────────────────────────────┬─────────────────────────┘
 │ │
@@ -113,111 +119,173 @@
 │ - dlt_forecast (大乐透预测) │ │ ├─ Transformer 模型训练 │
 └─────────────────────────────────────┘ │ └─ 保存模型 & 标准化器 │
 │ └─────────────────────────────────┘
-│ 数据更新（手动执行脚本）
+│ 数据更新（手动执行脚本 或 一键训练自动触发）
 ▼
 ┌─────────────────────────────────────┐
 │ 数据抓取脚本 (scripts/) │
 │ - fetch_ssq_incremental.py │
 │ - fetch_dlt_incremental.py │
-│ - generate_ssq_all.py │
-│ - generate_dlt_all.py │
 └─────────────────────────────────────┘
 ~~~
 
 **数据流说明**：
 
-1. **数据抓取** → 增量更新到 MySQL（`scripts/fetch_*.py`）
-2. **前端配置** → 提交训练参数（彩种、轮数、批次等）
+1. **数据抓取** → 增量更新到 MySQL（`scripts/fetch_*.py` 或一键训练自动触发）
+2. **前端配置** → 提交训练参数（彩种、轮数、批次、序列长度、学习率）
 3. **FastAPI** → 生成 `task_id`，通过 Celery 发布任务到 RabbitMQ
-4. **Celery Worker** → 消费任务，加载历史数据，训练 Transformer 模型，保存到 `models_storage/`
+4. **Celery Worker** → 消费任务，加载历史数据，训练 Transformer 模型，保存到 `models_storage/`（唯一文件名）
 5. **前端轮询** → 每 5 秒查询训练状态（pending/running/completed/failed）
-6. **预测推理** → 加载已训练模型，生成下一期预测号码，存入 `*_forecast` 表
-7. **前端展示** → 显示预测号码、质量评分、模型版本
+6. **预测推理** → 用户选择模型（支持多选），加载对应模型生成预测号码，存入 `*_forecast` 表
+7. **前端展示** → 每个模型独立卡片展示预测号码、质量评分、模型版本
+8. **预测分析** → 整合今日所有预测，加权推荐最优号码，与开奖结果对比
 
 ---
 
 ## 📁 项目目录结构
 
 ~~~
-open-lottery-ai/
-├── app/                                    # 后端主应用
-│   ├── api/
-│   │   └── routes/                         # REST API 路由
-│   │       ├── health.py                   # 健康检查接口
-│   │       ├── data.py                     # 数据查询接口
-│   │       ├── train.py                    # 训练任务接口
-│   │       ├── predict.py                  # 预测推理接口
-│   │       └── models.py                   # 模型管理接口
-│   ├── core/                               # 核心配置模块
-│   │   ├── config.py                       # 环境变量配置
-│   │   ├── database.py                     # 异步数据库引擎
-│   │   ├── redis_client.py                 # Redis 客户端
-│   │   └── celery_app.py                   # Celery 应用配置
-│   ├── models/                             # SQLAlchemy ORM 模型
-│   │   ├── ssq_history.py                  # 双色球历史数据表
-│   │   ├── dlt_history.py                  # 大乐透历史数据表
-│   │   ├── ssq_forecast.py                 # 双色球预测结果表
-│   │   └── dlt_forecast.py                 # 大乐透预测结果表
-│   ├── schemas/                            # Pydantic 数据模型
-│   │   └── lottery.py                      # 请求/响应模型定义
-│   ├── services/                           # 业务逻辑层
-│   │   ├── data_loader.py                  # 数据加载（含特征工程）
-│   │   ├── transformer_model.py            # Transformer 模型定义
-│   │   ├── trainer.py                      # 模型训练器
-│   │   └── predictor.py                    # 预测服务
-│   ├── tasks/                              # Celery 异步任务
-│   │   └── training_jobs.py                # 训练任务定义
-│   ├── __init__.py                         # 包标识文件
-│   └── main.py                             # FastAPI 入口
+open-lottery-ai/                                    # 项目根目录
 │
-├── lottery-ui/                             # Vue3 前端项目
+├── app/                                            # 后端主应用（FastAPI）
+│   ├── api/                                        # REST API 路由层
+│   │   └── routes/                                 # 路由定义
+│   │       ├── health.py                           # 健康检查接口
+│   │       ├── data.py                             # 数据查询接口（双色球/大乐透）
+│   │       ├── train.py                            # 训练任务接口（提交/状态查询）
+│   │       ├── predict.py                          # 预测推理接口
+│   │       ├── models.py                           # 模型管理接口（列表/下载）
+│   │       └── analysis.py                         # 预测分析接口（推荐号码+开奖对比）
+│   ├── core/                                       # 核心配置与基础设施
+│   │   ├── config.py                               # 环境变量配置（Pydantic Settings）
+│   │   ├── database.py                             # MySQL 异步引擎、会话工厂
+│   │   ├── redis_client.py                         # Redis 连接池
+│   │   └── celery_app.py                           # Celery 应用配置
+│   ├── models/                                     # SQLAlchemy ORM 数据模型
+│   │   ├── ssq_history.py                          # 双色球历史数据表
+│   │   ├── dlt_history.py                          # 大乐透历史数据表
+│   │   ├── ssq_forecast.py                         # 双色球预测结果表
+│   │   └── dlt_forecast.py                         # 大乐透预测结果表
+│   ├── schemas/                                    # Pydantic 请求/响应模型
+│   │   └── lottery.py                              # 彩种、训练、预测相关 Schema
+│   ├── services/                                   # 业务逻辑层
+│   │   ├── data_loader.py                          # 数据加载器（特征工程）
+│   │   ├── transformer_model.py                    # Transformer 模型定义
+│   │   ├── trainer.py                              # 模型训练器（保存模型+标准化器）
+│   │   ├── predictor.py                            # 预测服务（多模型预测）
+│   │   ├── analysis_service.py                     # 预测分析服务（推荐+对比）
+│   │   └── fetch_service.py                        # 数据抓取服务（调用抓取脚本）
+│   ├── tasks/                                      # Celery 异步任务
+│   │   └── training_jobs.py                        # 训练任务定义（含一键完整训练）
+│   ├── __init__.py                                 # 包标识文件
+│   └── main.py                                     # FastAPI 应用入口
+│
+├── lottery-ui/                                     # Vue3 前端项目
 │   ├── src/
-│   │   ├── api/                            # API 接口层
-│   │   ├── router/                         # 路由配置
-│   │   ├── store/                          # Pinia 状态管理
-│   │   ├── utils/                          # 工具函数（request 封装）
-│   │   ├── views/                          # 页面视图
-│   │   │   ├── home/                       # 首页（仪表盘）
-│   │   │   ├── data/                       # 数据管理
-│   │   │   ├── train/                      # 模型训练
-│   │   │   └── predict/                    # 预测结果
-│   │   ├── App.vue                         # 根组件
-│   │   ├── main.js                         # 入口文件
-│   │   └── permission.js                   # 路由守卫（开放）
-│   ├── .env.development                    # 开发环境变量
-│   ├── .env.production                     # 生产环境变量
-│   ├── package.json                        # 依赖管理
-│   └── vite.config.js                      # Vite 构建配置
+│   │   ├── api/                                    # API 接口层
+│   │   │   ├── data.js                             # 数据接口
+│   │   │   ├── train.js                            # 训练接口
+│   │   │   ├── predict.js                          # 预测接口
+│   │   │   ├── model.js                            # 模型管理接口
+│   │   │   └── analysis.js                         # 分析接口
+│   │   ├── router/                                 # 路由配置
+│   │   │   └── index.js
+│   │   ├── store/                                  # Pinia 状态管理
+│   │   │   ├── index.js                            # 统一导出
+│   │   │   ├── useDataStore.js                     # 数据状态
+│   │   │   ├── useTrainStore.js                    # 训练状态
+│   │   │   └── usePredictStore.js                  # 预测状态
+│   │   ├── utils/                                  # 工具函数
+│   │   │   ├── request.js                          # Axios 统一请求封装
+│   │   │   └── index.js                            # 通用工具（日期/格式化）
+│   │   ├── views/                                  # 页面视图
+│   │   │   ├── home/                               # 首页（仪表盘）
+│   │   │   ├── data/                               # 数据管理（历史数据浏览）
+│   │   │   ├── train/                              # 模型训练（参数配置+状态监控）
+│   │   │   ├── predict/                            # 预测结果（多模型并行预测）
+│   │   │   └── analysis/                           # 预测分析（推荐号码+开奖对比）
+│   │   ├── App.vue                                 # 根组件
+│   │   ├── main.js                                 # 入口文件
+│   │   └── permission.js                           # 路由守卫（开放系统）
+│   ├── .env.development                            # 开发环境变量
+│   ├── .env.production                             # 生产环境变量
+│   ├── package.json                                # 依赖管理
+│   └── vite.config.js                              # Vite 构建配置
 │
-├── models_storage/                         # 训练后的模型文件（.pt, .joblib）
-├── scripts/                                # 数据抓取脚本
-│   ├── fetch_ssq_incremental.py            # 双色球增量抓取
-│   ├── fetch_dlt_incremental.py            # 大乐透增量抓取
-│   ├── generate_ssq_all.py                 # 双色球全量生成
-│   └── generate_dlt_all.py                 # 大乐透全量生成
-├── sql/                                    # SQL 建表脚本
-│   └── open-lottery.sql                    # 完整建表语句
-├── .env.development                        # 开发环境变量
-├── .env.production                         # 生产环境变量
-├── docker-compose.yml                      # 依赖服务（MySQL, Redis, RabbitMQ）
-├── requirements.txt                        # Python 依赖
-└── README.md                               # 项目文档
+├── models_storage/                                 # 训练生成的模型文件目录
+│   ├── {彩种}_epochs{N}_bs{N}_seq{N}_lr{N}_{时间戳}.pt  # PyTorch 模型
+│   ├── {彩种}_epochs{N}_bs{N}_seq{N}_lr{N}_{时间戳}_scaler.joblib  # 标准化器
+│   ├── {彩种}_final.pt                             # 最新模型快照
+│   └── {彩种}_scaler.joblib                        # 最新标准化器
+│
+├── scripts/                                        # 数据抓取脚本
+│   ├── __init__.py
+│   ├── fetch_ssq_incremental.py                    # 双色球增量抓取
+│   ├── fetch_dlt_incremental.py                    # 大乐透增量抓取
+│   ├── generate_ssq_all.py                         # 双色球全量生成
+│   └── generate_dlt_all.py                         # 大乐透全量生成
+│
+├── sql/                                            # SQL 建表脚本
+│   └── open-lottery.sql                            # 完整建表语句
+│
+├── .env.development                                # 开发环境变量
+├── .env.production                                 # 生产环境变量
+├── .gitignore                                      # Git 忽略文件
+├── batch_train_seqlen.py                           # 批量训练脚本（序列长度扫描）
+├── docker-compose.yml                              # 依赖服务（MySQL/Redis/RabbitMQ）
+├── LICENSE                                         # MIT 许可证
+├── README.md                                       # 项目文档
+└── requirements.txt                                # Python 依赖清单
 
 ~~~
+
+
+---
+
+## 🔍 核心功能详解
+
+### 1. 模型训练（一键完整训练）
+
+- 支持双色球和大乐透两种彩种
+- 可配置参数：训练轮数（1-500）、批次大小（1-256）、序列长度（10-3000）、学习率（5位精度）
+- 支持训练前自动抓取最新数据（增量更新）
+- 每次训练生成唯一模型文件名，永不覆盖
+- 实时轮询训练状态（等待中/抓取数据/训练中/已完成/失败）
+
+### 2. 多模型预测
+
+- 支持同时选择多个模型进行预测
+- 每个模型生成独立的预测结果卡片
+- 展示预测号码（红球/前区 + 蓝球/后区）、质量评分、模型版本
+- 同一天同一模型只保留一条预测记录（自动更新）
+
+### 3. 预测分析
+
+- 展示今日所有预测记录
+- 基于质量评分加权提取最优推荐号码
+- 显示双色球和大乐透的开奖规则（二、四、日 / 一、三、六）
+- 下一期开奖日期倒计时
+- 与开奖结果对比，显示命中个数
+
+### 4. 模型管理
+
+- 模型文件按 `{彩种}_epochs{N}_bs{N}_seq{N}_lr{N}_{时间戳}.pt` 格式命名
+- 同时保留 `{彩种}_final.pt` 作为最新模型
+- 支[services](app/services)持模型列表查看和下载
+
+---
 
 ## 🚀 快速开始
 
 ### 前提条件
 
-~~~
 - Python 3.10+ 和 Conda（推荐）
 - Node.js 16+ 和 npm/yarn
 - Docker 和 Docker Compose
-~~~
 
 ### 一键启动
 
 ~~~
+
 # 1. 启动依赖服务
 cd open-lottery-ai
 docker-compose up -d
@@ -259,8 +327,6 @@ start cmd /k "npm run dev"
 # 访问前端: http://localhost:5173
 # API 文档: http://localhost:8000/docs
 # RabbitMQ 管理: http://localhost:15672 (guest/guest)
-
-echo "🎉 所有服务已启动！"
 
 ~~~
 

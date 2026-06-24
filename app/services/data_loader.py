@@ -4,11 +4,12 @@
 同时提供异步和同步版本，异步供 FastAPI 使用，同步供 Celery 训练使用。
 """
 import pandas as pd
+import numpy as np
+import pymysql
 from sqlalchemy import select
 from app.core.database import AsyncSessionLocal
 from app.models.ssq_history import SSQHistory
 from app.models.dlt_history import DLTHistory
-import pymysql
 from app.core.config import settings
 
 
@@ -128,7 +129,7 @@ def load_ssq_data_sync(limit: int = None) -> pd.DataFrame:
             'red_one', 'red_two', 'red_three', 'red_four', 'red_five', 'red_six', 'blue_one'
         ]].values
 
-        data = np.concatenate([features, targets], axis=1)
+        data = np.concatenate([features, targets], axis=1)   # 使用 np
         columns = [
             'year','month','quarter','sum','span','odd','even','small','big',
             'prime','composite','mod0','mod1','mod2',
@@ -169,7 +170,7 @@ def load_dlt_data_sync(limit: int = None) -> pd.DataFrame:
             'back_one', 'back_two'
         ]].values
 
-        data = np.concatenate([features, targets], axis=1)
+        data = np.concatenate([features, targets], axis=1)   # 使用 np
         columns = [
             'year','month','quarter','sum','span','odd','even','small','big',
             'prime','composite','mod0','mod1','mod2',

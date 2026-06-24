@@ -1,10 +1,6 @@
 SET FOREIGN_KEY_CHECKS = 0;
-TRUNCATE TABLE dlt_all;
 TRUNCATE TABLE dlt_forecast;
-TRUNCATE TABLE dlt_history;
-TRUNCATE TABLE ssq_all;
 TRUNCATE TABLE ssq_forecast;
-TRUNCATE TABLE ssq_history;
 SET FOREIGN_KEY_CHECKS = 1;
 
 docker exec -i lottery-mysql mysql -uroot -p123456 open-lottery -e "
